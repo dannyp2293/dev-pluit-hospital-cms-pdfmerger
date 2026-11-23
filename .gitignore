@@ -1,0 +1,38 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+.streamlit/secrets.toml
+.streamlit/secrets.toml.*
+
+# Operational databases
+DATABASE/
+*.db
+*.sqlite
+*.sqlite3
+
+# MCU source documents and generated output
+DATA_SUMBER/
+HASIL_KONVERSI/
+HASIL_PDF/
+LAPORAN/
+NORMALISASI_NAMA/
+
+# Temporary files
+temp/
+tmp/
+*.part
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
