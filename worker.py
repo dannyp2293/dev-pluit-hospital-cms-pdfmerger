@@ -155,6 +155,64 @@ def health() -> tuple[dict, int]:
     return result, 0 if overall_ok else 1
 
 
+
+def extract_pdf(args: argparse.Namespace) -> tuple[dict, int]:
+    """Ekstrak teks, identitas, dan OCR dari satu file PDF."""
+    filepath = args.file.expanduser().resolve()
+
+    if not filepath.is_file():
+        return {
+            "ok": False,
+            "command": "extract",
+            "error": "File PDF tidak ditemukan.",
+        }, 2
+
+    if filepath.suffix.lower() != ".pdf":
+        return {
+            "ok": False,
+            "command": "extract",
+            "error": "Format file harus PDF.",
+        }, 2
+
+    try:
+        from processor.database import init_db
+        from processor.identity import extract_name_from_filename
+        from processor.ocr import extract_hybrid_text_from_pdf
+        from processor.utils import sha256_file
+
+        init_db()
+
+        file_hash = sha256_file(filepath)
+        filename_candidate = extract_name_from_filename(
+            filepath.name,
+            args.exam_code,
+        )
+
+        extraction = extract_hybrid_text_from_pdf(
+            filepath,
+            file_hash,
+            enable_ocr=not args.no_ocr,
+            filename_candidate=filename_candidate,
+        )
+
+        return {
+            "ok": True,
+            "command": "extract",
+            "file_name": filepath.name,
+            "file_hash": file_hash,
+            "filename_candidate": filename_candidate,
+            "extraction": extraction,
+        }, 0
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "command": "extract",
+            "error": str(exc),
+        }, 1
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="MCU PDF Merger Python CLI Worker"
@@ -163,10 +221,27 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("health", help="Periksa kesiapan Python worker")
 
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help="Ekstrak teks dan identitas dari PDF",
+    )
+    extract_parser.add_argument("--file", required=True, type=Path)
+    extract_parser.add_argument("--exam-code", default="")
+    extract_parser.add_argument(
+        "--no-ocr",
+        action="store_true",
+        help="Nonaktifkan OCR Tesseract",
+    )
+
     args = parser.parse_args()
 
     if args.command == "health":
         result, exit_code = health()
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return exit_code
+
+    if args.command == "extract":
+        result, exit_code = extract_pdf(args)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return exit_code
 
