@@ -381,3 +381,144 @@ def advanced_name_similarity(name_a: str, name_b: str) -> dict[str, Any]:
     if min(len(tokens_a), len(tokens_b)) == 1 and shorter < 6:
         weighted *= 0.90
     return {"score": round(weighted, 1), "algorithms": {k: round(v, 1) for k, v in scores.items()}}
+
+
+def _patient_identity_summary(patient: dict[str, Any] | None) -> dict[str, set[str]]:
+    summary = {"nik": set(), "mr": set(), "dob": set()}
+    if not patient:
+        return summary
+    for file_info in patient.get("files", []):
+        if file_info.get("nik_hash"):
+            summary["nik"].add(file_info["nik_hash"])
+        if file_info.get("mr_hash"):
+            summary["mr"].add(file_info["mr_hash"])
+        if file_info.get("dob_iso"):
+            summary["dob"].add(file_info["dob_iso"])
+    return summary
+
+
+def _compare_identity_values(values_a: set[str], values_b: set[str]) -> str:
+    """Bandingkan satu jenis identitas tanpa menganggap data parsial sebagai kecocokan."""
+    if not values_a and not values_b:
+        return "missing"
+    if not values_a or not values_b:
+        return "incomplete"
+    # Jika satu kelompok memuat beberapa nomor/tanggal berbeda, jangan simpulkan cocok
+    # hanya karena salah satu nilai kebetulan beririsan.
+    if len(values_a) > 1 or len(values_b) > 1:
+        return "inconsistent"
+    return "same" if values_a == values_b else "different"
+
+
+def compare_patient_groups(
+    name_a: str, name_b: str,
+    patient_a: dict[str, Any] | None = None,
+    patient_b: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bandingkan nama sebagai dasar; metadata identitas hanya informasi tambahan.
+
+    No. RM, MRN, NIK, dan tanggal lahir tidak diwajibkan dan tidak menjadi
+    pengunci penggabungan karena dokumen dapat berasal dari fasilitas/vendor
+    berbeda atau hasil OCR metadata dapat keliru.
+    """
+    name_result = advanced_name_similarity(name_a, name_b)
+    evidence_a = _patient_identity_summary(patient_a)
+    evidence_b = _patient_identity_summary(patient_b)
+    identity_status = {
+        "nik": _compare_identity_values(evidence_a["nik"], evidence_b["nik"]),
+        "mr": _compare_identity_values(evidence_a["mr"], evidence_b["mr"]),
+        "dob": _compare_identity_values(evidence_a["dob"], evidence_b["dob"]),
+    }
+    nik_match = identity_status["nik"] == "same"
+    dob_match = identity_status["dob"] == "same"
+    name_score = float(name_result["score"])
+
+    if name_score >= 90:
+        recommendation = (
+            "Nama sangat mirip. Metadata seperti NIK, tanggal lahir, dan No. RM "
+            "dapat menjadi informasi tambahan jika tersedia, tetapi bukan syarat wajib."
+        )
+    elif name_score >= 75:
+        recommendation = (
+            "Nama cukup mirip dan perlu diperiksa pada dokumen sumber. Metadata "
+            "tambahan boleh membantu, tetapi tidak menjadi syarat pencocokan."
+        )
+    else:
+        recommendation = (
+            "Nama berbeda cukup jauh. Jangan gabungkan tanpa pemeriksaan manual "
+            "pada dokumen sumber."
+        )
+
+    status_reasons = {
+        "same": "sama pada kedua kelompok",
+        "different": "berbeda (informasi tambahan saja)",
+        "inconsistent": "lebih dari satu nilai (informasi tambahan saja)",
+        "incomplete": "hanya tersedia sebagian",
+        "missing": "tidak tersedia",
+    }
+    reasons = [f"Kemiripan tulisan nama {name_score:.1f}%"]
+    reasons.append(f"NIK: {status_reasons[identity_status['nik']]}")
+    reasons.append(f"No. RM: {status_reasons[identity_status['mr']]}")
+    reasons.append(f"Tanggal lahir: {status_reasons[identity_status['dob']]}")
+
+    return {
+        "score": round(name_score, 1),
+        "name_score": round(name_score, 1),
+        "algorithms": name_result["algorithms"],
+        "identity_status": identity_status,
+        "nik_match": nik_match,
+        "dob_match": dob_match,
+        "identity_conflict": False,
+        "reasons": reasons,
+        "recommendation": recommendation,
+    }
+
+
+def find_internal_identity_conflicts(patient: dict[str, Any]) -> list[str]:
+    """Metadata berbeda tidak mengunci kelompok; hanya status nama yang mengunci."""
+    return []
+
+
+def get_patient_name_review_files(patient: dict[str, Any]) -> list[dict[str, Any]]:
+    """Dokumen bermasalah menahan seluruh kelompok pasien, bukan hanya file itu."""
+    return [
+        item for item in patient.get("files", [])
+        if item.get("name_review_required")
+    ]
+
+
+def patient_is_safe_for_bulk_approval(
+    patient: dict[str, Any], unresolved_name_collision: bool = False,
+) -> bool:
+    """Persetujuan massal hanya untuk kelompok yang seluruh dokumennya lolos."""
+    return bool(
+        patient.get("files")
+        and not get_patient_name_review_files(patient)
+        and not find_internal_identity_conflicts(patient)
+        and not unresolved_name_collision
+    )
+
+
+def find_similar_patient_pairs(
+    patient_names: list[str],
+    patients_data: dict[str, dict[str, Any]] | None = None,
+) -> list[tuple[str, str, float]]:
+    """Temukan kandidat pasangan dengan beberapa algoritma dan bukti identitas."""
+    similar_pairs: list[tuple[str, str, float]] = []
+    for index, name1 in enumerate(patient_names):
+        normalized1 = normalize_patient_identity_name(name1)
+        if not normalized1:
+            continue
+        for other_index in range(index + 1, len(patient_names)):
+            name2 = patient_names[other_index]
+            normalized2 = normalize_patient_identity_name(name2)
+            if not normalized2 or normalized1 == normalized2:
+                continue
+            evidence = compare_patient_groups(
+                name1, name2,
+                (patients_data or {}).get(name1),
+                (patients_data or {}).get(name2),
+            )
+            if evidence["score"] >= 75 or evidence["nik_match"]:
+                similar_pairs.append((name1, name2, evidence["score"]))
+    return sorted(similar_pairs, key=lambda item: item[2], reverse=True)

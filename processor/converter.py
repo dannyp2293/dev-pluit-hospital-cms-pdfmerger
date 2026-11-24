@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageOps, ImageSequence
 
 

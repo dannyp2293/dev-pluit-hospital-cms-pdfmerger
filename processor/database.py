@@ -207,3 +207,14 @@ def save_ocr_cache(
     except sqlite3.Error:
         # OCR tetap dapat berjalan walaupun cache tidak tersedia.
         pass
+
+
+def list_batch_documents(batch_name: str, exam_code: str | None = None) -> list[sqlite3.Row]:
+    query = "SELECT * FROM documents WHERE batch_name=?"
+    params: list[Any] = [batch_name]
+    if exam_code:
+        query += " AND exam_code=?"
+        params.append(exam_code)
+    query += " ORDER BY exam_code, original_name"
+    with get_conn() as conn:
+        return conn.execute(query, params).fetchall()

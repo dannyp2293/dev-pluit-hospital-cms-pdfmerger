@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf as fitz
 from PIL import Image, ImageFilter, ImageOps
 from rapidfuzz import fuzz
 
