@@ -278,6 +278,68 @@ def analyze_batch(args: argparse.Namespace) -> tuple[dict, int]:
 
 
 
+
+def analyze_manifest_file(args: argparse.Namespace) -> tuple[dict, int]:
+    """Analisis dokumen berdasarkan JSON manifest dari Laravel."""
+    manifest_path = args.manifest.expanduser().resolve()
+
+    if not manifest_path.is_file():
+        return {
+            "ok": False,
+            "command": "analyze",
+            "error": "Manifest tidak ditemukan.",
+        }, 2
+
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+
+        if not isinstance(manifest, dict):
+            raise ValueError(
+                "Format manifest harus berupa object JSON."
+            )
+
+        from processor.database import init_ocr_cache_db
+        from processor.analyzer import analyze_manifest_documents
+
+        init_ocr_cache_db()
+
+        patients = analyze_manifest_documents(
+            manifest,
+            enable_ocr=not args.no_ocr,
+        )
+
+        batch_name = manifest["batch_name"]
+        document_count = sum(
+            len(files) for files in patients.values()
+        )
+
+        return {
+            "ok": True,
+            "command": "analyze",
+            "mode": "manifest",
+            "batch_name": batch_name,
+            "patient_count": len(patients),
+            "document_count": document_count,
+            "patients": patients,
+        }, 0
+
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "command": "analyze",
+            "error": str(exc),
+        }, 2
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "command": "analyze",
+            "error": str(exc),
+        }, 1
+
+
 def merge_approved_batch(args: argparse.Namespace) -> tuple[dict, int]:
     """Merge hanya pasien yang telah disetujui melalui manifest Laravel."""
     manifest_path = args.manifest.expanduser().resolve()
@@ -529,7 +591,11 @@ def main() -> int:
         "analyze",
         help="Analisis dan kelompokkan dokumen dalam satu batch",
     )
-    analyze_parser.add_argument("--batch-name", required=True)
+    analyze_input = analyze_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    analyze_input.add_argument("--batch-name")
+    analyze_input.add_argument("--manifest", type=Path)
     analyze_parser.add_argument(
         "--no-ocr",
         action="store_true",
@@ -560,7 +626,11 @@ def main() -> int:
         return exit_code
 
     if args.command == "analyze":
-        result, exit_code = analyze_batch(args)
+        if args.manifest is not None:
+            result, exit_code = analyze_manifest_file(args)
+        else:
+            result, exit_code = analyze_batch(args)
+
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return exit_code
 

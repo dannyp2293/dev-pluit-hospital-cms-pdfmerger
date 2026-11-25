@@ -7,7 +7,7 @@ from typing import Any
 
 import pymupdf as fitz
 
-from .database import list_batch_documents
+from .database import DEFAULT_EXAMS, list_batch_documents
 from .identity import (
     advanced_name_similarity,
     extract_name_from_filename,
@@ -213,7 +213,15 @@ def analyze_batch_documents(
             "original_filename": row["original_name"],
             "exam_code": row["exam_code"],
         })
+    return analyze_documents(documents_to_analyze, enable_ocr=enable_ocr)
 
+
+
+def analyze_documents(
+    documents_to_analyze: list[dict[str, Any]],
+    enable_ocr: bool = True,
+) -> dict[str, list[dict[str, Any]]]:
+    """Mesin analisis bersama untuk dokumen dari SQLite atau manifest."""
     candidates: dict[str, list[dict[str, Any]]] = {}
     seen_content_batch: set[str] = set()
 
@@ -293,6 +301,154 @@ def analyze_batch_documents(
             "dob_iso": identity_fields["dob_iso"],
             "extension": ".pdf",
         }
+        if item.get("document_id") is not None:
+            info["document_id"] = item["document_id"]
         candidates.setdefault(group_key, []).append(info)
 
     return candidates
+
+def analyze_manifest_documents(
+    manifest: dict[str, Any],
+    enable_ocr: bool = True,
+) -> dict[str, list[dict[str, Any]]]:
+    """Validasi JSON manifest Laravel dan analisis dokumennya."""
+
+    if not isinstance(manifest, dict):
+        raise ValueError("Manifest harus berupa object JSON.")
+
+    batch_name = manifest.get("batch_name")
+
+    if (
+        not isinstance(batch_name, str)
+        or not batch_name.strip()
+        or batch_name != batch_name.strip()
+        or batch_name in {".", ".."}
+        or any(separator in batch_name for separator in ("/", "\\", "\x00"))
+    ):
+        raise ValueError("Nama batch tidak valid.")
+
+    data_root = DATA_DIR.resolve()
+    batch_dir = (data_root / batch_name).resolve()
+
+    if batch_dir == data_root or data_root not in batch_dir.parents:
+        raise ValueError("Lokasi batch berada di luar DATA_DIR.")
+
+    if not batch_dir.is_dir():
+        raise ValueError("Direktori batch tidak ditemukan.")
+
+    raw_documents = manifest.get("documents")
+
+    if not isinstance(raw_documents, list) or not raw_documents:
+        raise ValueError("Manifest harus berisi daftar dokumen.")
+
+    valid_exam_codes = {code for code, _ in DEFAULT_EXAMS}
+
+    documents_to_analyze: list[dict[str, Any]] = []
+    seen_document_ids: set[int] = set()
+    seen_paths: set[str] = set()
+
+    for index, item in enumerate(raw_documents):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Dokumen indeks {index} harus berupa object."
+            )
+
+        document_id = item.get("document_id")
+
+        if type(document_id) is not int or document_id <= 0:
+            raise ValueError(
+                f"document_id pada indeks {index} tidak valid."
+            )
+
+        if document_id in seen_document_ids:
+            raise ValueError(f"document_id duplikat: {document_id}")
+
+        seen_document_ids.add(document_id)
+
+        if item.get("status") != "BERHASIL":
+            raise ValueError(
+                f"Dokumen {document_id} belum berstatus BERHASIL."
+            )
+
+        if item.get("merge_enabled") is not True:
+            raise ValueError(
+                f"Dokumen {document_id} tidak diaktifkan untuk analisis."
+            )
+
+        exam_code = item.get("exam_code")
+
+        if not isinstance(exam_code, str):
+            raise ValueError(
+                f"exam_code dokumen {document_id} tidak valid."
+            )
+
+        exam_code = exam_code.strip().upper()
+
+        if exam_code not in valid_exam_codes:
+            raise ValueError(
+                f"Kode pemeriksaan tidak dikenal: {exam_code}"
+            )
+
+        filepath = item.get("filepath")
+
+        if not isinstance(filepath, str) or not filepath.strip():
+            raise ValueError(
+                f"filepath dokumen {document_id} tidak valid."
+            )
+
+        pdf_path = Path(filepath).expanduser().resolve()
+
+        try:
+            pdf_path.relative_to(batch_dir)
+        except ValueError:
+            raise ValueError(
+                f"File dokumen {document_id} berada di luar direktori batch."
+            ) from None
+
+        if not pdf_path.is_file():
+            raise ValueError(
+                f"File PDF dokumen {document_id} tidak ditemukan."
+            )
+
+        if pdf_path.suffix.lower() != ".pdf":
+            raise ValueError(
+                f"Dokumen {document_id} bukan file PDF."
+            )
+
+        resolved_path = str(pdf_path)
+
+        if resolved_path in seen_paths:
+            raise ValueError(
+                f"Path dokumen duplikat: {pdf_path.name}"
+            )
+
+        seen_paths.add(resolved_path)
+
+        original_filename = item.get("original_filename")
+
+        if (
+            not isinstance(original_filename, str)
+            or not original_filename.strip()
+            or Path(original_filename).name != original_filename
+            or any(
+                separator in original_filename
+                for separator in ("/", "\\", "\x00")
+            )
+        ):
+            raise ValueError(
+                f"original_filename dokumen {document_id} tidak valid."
+            )
+
+        documents_to_analyze.append({
+            "document_id": document_id,
+            "filepath": resolved_path,
+            "filename": pdf_path.name,
+            "original_filename": original_filename,
+            "exam_code": exam_code,
+        })
+
+    return analyze_documents(
+        documents_to_analyze,
+        enable_ocr=enable_ocr,
+    )
+
