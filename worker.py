@@ -175,12 +175,12 @@ def extract_pdf(args: argparse.Namespace) -> tuple[dict, int]:
         }, 2
 
     try:
-        from processor.database import init_db
+        from processor.database import init_ocr_cache_db
         from processor.identity import extract_name_from_filename
         from processor.ocr import extract_hybrid_text_from_pdf
         from processor.utils import sha256_file
 
-        init_db()
+        init_ocr_cache_db()
 
         file_hash = sha256_file(filepath)
         filename_candidate = extract_name_from_filename(

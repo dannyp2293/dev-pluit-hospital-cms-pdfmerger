@@ -43,6 +43,30 @@ def get_conn():
         conn.close()
 
 
+def _ensure_ocr_cache_table(conn: sqlite3.Connection) -> None:
+    """Pastikan tabel OCR cache tersedia."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ocr_cache (
+            file_hash TEXT NOT NULL,
+            page_number INTEGER NOT NULL,
+            language TEXT NOT NULL,
+            engine_version TEXT NOT NULL,
+            extracted_text TEXT NOT NULL,
+            confidence REAL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(file_hash, page_number, language, engine_version)
+        )
+        """
+    )
+
+
+def init_ocr_cache_db() -> None:
+    """Inisialisasi database khusus OCR cache."""
+    with get_conn() as conn:
+        _ensure_ocr_cache_table(conn)
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -140,22 +164,8 @@ def init_db() -> None:
                 (code, label),
             )
 
-        # Cache OCR dipisahkan dari manifest dokumen. Kunci berdasarkan hash
-        # PDF + halaman + bahasa + versi engine agar OCR tidak diulang tanpa sebab.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ocr_cache (
-                file_hash TEXT NOT NULL,
-                page_number INTEGER NOT NULL,
-                language TEXT NOT NULL,
-                engine_version TEXT NOT NULL,
-                extracted_text TEXT NOT NULL,
-                confidence REAL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY(file_hash, page_number, language, engine_version)
-            )
-            """
-        )
+        _ensure_ocr_cache_table(conn)
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS identity_audit_log (
